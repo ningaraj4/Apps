@@ -1,0 +1,70 @@
+[versions]
+agp = "8.2.2"
+kotlin = "1.9.22"
+coreKtx = "1.12.0"
+compose = "1.6.4"
+composeBom = "2024.05.00"
+composeCompiler = "1.5.8"
+
+material3 = "1.2.0"
+junit = "4.13.2"
+junitVersion = "1.1.5"
+espressoCore = "3.5.1"
+lifecycleRuntimeKtx = "2.7.0"
+viewmodelCompose = "2.7.0"
+activityCompose = "1.8.2"
+navigation = "2.7.7"
+firebase-bom = "32.7.4"
+firebase-auth = "22.3.1"
+firebase-firestore = "25.0.0"
+coroutines = "1.8.1"
+
+[libraries]
+# AndroidX Core + Lifecycle
+androidx-compose-compiler = { group = "androidx.compose.compiler", name = "compiler", version.ref = "composeCompiler" }
+
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+
+# Compose UI
+androidx-ui = { group = "androidx.compose.ui", name = "ui", version.ref = "compose" }
+androidx-ui-text = { group = "androidx.compose.ui", name = "ui-text", version.ref = "compose" }
+androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics", version.ref = "compose" }
+androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling", version.ref = "compose" }
+androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview", version.ref = "compose" }
+androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest", version.ref = "compose" }
+androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4", version.ref = "compose" }
+
+# Material3
+androidx-material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "material3" }
+
+# Compose BOM
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+
+# Navigation
+navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigation" }
+
+# Activity Compose
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+
+# ViewModel Compose
+viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "viewmodelCompose" }
+
+# Firebase
+firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebase-bom" }
+firebase-auth = { group = "com.google.firebase", name = "firebase-auth-ktx", version.ref = "firebase-auth" }
+firebase-firestore = { group = "com.google.firebase", name = "firebase-firestore-ktx", version.ref = "firebase-firestore" }
+
+# Coroutines
+coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
+coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+
+# Testing
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+firebase = { id = "com.google.gms.google-services", version = "4.4.1" }
