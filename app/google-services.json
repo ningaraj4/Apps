@@ -1,33 +1,33 @@
 {
   "project_info": {
-    "project_number": "112944457379",
-    "project_id": "feedback-app-69666",
-    "storage_bucket": "feedback-app-69666.firebasestorage.app"
+    "project_number": "1004228087035",
+    "project_id": "edufeed-c533e",
+    "storage_bucket": "edufeed-c533e.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:112944457379:android:76dc9fb3f0735e674e4116",
+        "mobilesdk_app_id": "1:1004228087035:android:a9b816b482751e4015f45e",
         "android_client_info": {
-          "package_name": "com.example.feedbackapp"
+          "package_name": "com.example.edufeed"
         }
       },
       "oauth_client": [
         {
-          "client_id": "112944457379-catducqmj0laj6efta6d5b03rh8d3s8p.apps.googleusercontent.com",
+          "client_id": "1004228087035-3t5src96tluh5jq25ugv81n2c5jf5k8u.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
       "api_key": [
         {
-          "current_key": "AIzaSyAP-jEKUzWm8ArocSPoK91mxPppLGYzkDA"
+          "current_key": "AIzaSyCGCrfRFgXlE2dGNyDbdcdefdavlUNSwUo"
         }
       ],
       "services": {
         "appinvite_service": {
           "other_platform_oauth_client": [
             {
-              "client_id": "112944457379-catducqmj0laj6efta6d5b03rh8d3s8p.apps.googleusercontent.com",
+              "client_id": "1004228087035-3t5src96tluh5jq25ugv81n2c5jf5k8u.apps.googleusercontent.com",
               "client_type": 3
             }
           ]

@@ -1,0 +1,9 @@
+task buildInfo {
+    doLast {
+        println "Java home: ${System.getProperty('java.home')}"
+        println "Java version: ${System.getProperty('java.version')}"
+        println "Gradle version: ${gradle.gradleVersion}"
+        println "Android Gradle Plugin version: ${project.buildscript.configurations.classpath.resolvedConfiguration.resolvedArtifacts.find { it.name == 'com.android.tools.build:gradle' }.moduleVersion.id.version}"
+        println "Kotlin version: ${org.jetbrains.kotlin.config.KotlinCompilerVersion.VERSION}"
+    }
+}

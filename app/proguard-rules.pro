@@ -19,3 +19,25 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Firebase rules
+-keep class com.google.firebase.** { *; }
+-keep class com.google.android.gms.** { *; }
+-dontwarn com.google.firebase.**
+-dontwarn com.google.android.gms.**
+
+# Compose rules
+-keep class androidx.compose.** { *; }
+-keepclassmembers class androidx.compose.** {
+    *;
+}
+
+# Keep data classes
+-keepclassmembers class com.EduFeed.edufeed.data.models.** {
+    *;
+}
+
+# Keep ViewModels
+-keepclassmembers class com.classsphere.edufeed.viewmodel.** {
+    *;
+}

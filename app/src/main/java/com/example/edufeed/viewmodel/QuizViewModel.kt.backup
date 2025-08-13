@@ -1,0 +1,623 @@
+package com.example.edufeed.viewmodel
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
+import com.example.edufeed.data.QuizRepository
+import com.example.edufeed.data.models.*
+import com.example.edufeed.utils.Result
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import java.util.*
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
+
+// Sealed class representing the UI state for the quiz
+sealed class QuizUiState {
+    data object Idle : QuizUiState()
+    data object Loading : QuizUiState()
+    data class Error(val message: String) : QuizUiState()
+    data class Loaded(
+        val quiz: Quiz?,
+        val questions: List<QuizQuestion>,
+        val responses: Map<String, QuizResponse>,
+        val timeRemaining: Duration,
+        val isSubmitting: Boolean = false
+    ) : QuizUiState()
+    
+    data class Results(
+        val quiz: Quiz?,
+        val questions: List<QuizQuestion>,
+        val responses: List<QuizResponse>,
+        val score: Int,
+        val correctAnswers: Int,
+        val incorrectAnswers: Int,
+        val unansweredQuestions: Int
+    ) : QuizUiState()
+}
+
+
+class QuizViewModel(
+    application: Application,
+    private val repository: QuizRepository = QuizRepository()
+) : AndroidViewModel(application) {
+    // UI State
+    private val _uiState = MutableStateFlow<QuizUiState>(QuizUiState.Idle)
+    val uiState: StateFlow<QuizUiState> = _uiState.asStateFlow()
+    
+    // Quiz state
+    private val _quiz = MutableStateFlow<Quiz?>(null)
+    val quiz = _quiz.asStateFlow()
+    
+    private val _questions = MutableStateFlow<List<QuizQuestion>>(emptyList())
+    val questions = _questions.asStateFlow()
+    
+    // Current in-memory answers while taking a quiz (keyed by questionId)
+    // Current responses (in-memory during quiz taking)
+    private val _responses = MutableStateFlow<Map<String, QuizResponse>>(emptyMap())
+    
+    // Persisted/submitted responses loaded from local/remote for analytics/results
+    private val _submittedResponses = MutableStateFlow<List<QuizResponse>>(emptyList())
+    val responses: StateFlow<List<QuizResponse>> = _submittedResponses.asStateFlow()
+    
+    // Quiz timer state
+    private val _timeRemaining = MutableStateFlow(30.minutes)
+    val timeRemaining = _timeRemaining.asStateFlow()
+    
+    // Security state
+    private val _securityViolation = MutableStateFlow<String?>(null)
+    val securityViolation = _securityViolation.asStateFlow()
+    
+    // Quiz results state
+    private val _score = MutableStateFlow(0)
+    val score = _score.asStateFlow()
+    
+    // Quiz timer (30 minutes by default)
+    private var quizTimer: Job? = null
+    
+    // Random number generator for question selection
+    private val random = Random()
+
+    // Selected questions cache for random selection flows
+    private val _selectedQuestions = MutableStateFlow<List<QuizQuestion>>(emptyList())
+
+    // Quiz sessions list for teacher/session management screens
+    private val _quizSessions = MutableStateFlow<List<QuizSession>>(emptyList())
+    val quizSessions = _quizSessions.asStateFlow()
+
+    /**
+     * Loads a quiz by ID and initializes the quiz state
+     */
+    /**
+     * Loads a quiz by ID and initializes the quiz state
+     */
+    fun loadQuiz(quizId: String) {
+        viewModelScope.launch {
+            _uiState.value = QuizUiState.Loading
+            
+            try {
+                // Load quiz and questions in parallel
+                val quizResult = async { repository.getQuizByIdLocal(quizId) }
+                val questionsResult = async { repository.getQuestionsForQuizLocal(quizId) }
+                
+                val quiz = quizResult.await()
+                val questions = questionsResult.await()
+                
+                if (quiz != null && questions.isNotEmpty()) {
+
+                        
+                        _quiz.value = quiz
+                        _questions.value = questions
+                        
+                        // Initialize responses map with empty responses for each question
+                        val initialResponses = questions.associate { question ->
+                            question.questionId to QuizResponse(
+                                responseId = "${UUID.randomUUID()}",
+                                quizId = quizId,
+                                questionId = question.questionId,
+                                selectedAnswer = "",
+                                isCorrect = false,
+                                submittedAt = 0L
+                            )
+                        }
+                        _responses.value = initialResponses
+                        
+                        // Start the quiz timer
+                        startTimer()
+                        
+                        _uiState.value = QuizUiState.Loaded(
+                            quiz = quiz,
+                            questions = questions,
+                            responses = initialResponses,
+                            timeRemaining = _timeRemaining.value
+                        )
+                } else {
+                    _uiState.value = QuizUiState.Error("Failed to load quiz or questions")
+                }
+            } catch (e: Exception) {
+                _uiState.value = QuizUiState.Error(e.message ?: "An unknown error occurred")
+            }
+        }
+    }
+    
+    /**
+     * Updates the user's answer for a specific question
+     */
+    fun updateAnswer(questionId: String, answer: String) {
+        val question = _questions.value.find { it.questionId == questionId } ?: return
+        
+        val isCorrect = when (question.type) {
+            QuestionType.MCQ, QuestionType.TRUE_FALSE -> 
+                answer == question.correctAnswer
+            QuestionType.ONE_WORD -> 
+                answer.equals(question.correctAnswer, ignoreCase = true)
+            QuestionType.MULTIPLE_CORRECT -> 
+                answer.split(",").toSet() == question.correctAnswer.split(",").toSet()
+        }
+        
+        val response = QuizResponse(
+            responseId = "${UUID.randomUUID()}",
+            quizId = question.quizId,
+            questionId = questionId,
+            selectedAnswer = answer,
+            isCorrect = isCorrect,
+            submittedAt = System.currentTimeMillis()
+        )
+        
+        _responses.update { current ->
+            current.toMutableMap().apply {
+                this[questionId] = response
+            }
+        }
+    }
+    
+    /**
+     * Submits the quiz and calculates the results
+     */
+    fun submitQuiz() {
+        viewModelScope.launch {
+            _uiState.value = (_uiState.value as? QuizUiState.Loaded)?.copy(
+                isSubmitting = true
+            ) ?: return@launch
+            
+            try {
+                val currentQuiz = _quiz.value ?: return@launch
+                val currentQuestions = _questions.value
+                val currentResponses = _responses.value.values.toList()
+                
+                // Calculate score
+                val totalQuestions = currentQuestions.size
+                val correctAnswers = currentResponses.count { it.isCorrect }
+                val score = if (totalQuestions > 0) {
+                    (correctAnswers.toFloat() / totalQuestions * 100).toInt()
+                } else {
+                    0
+                }
+                
+                // Save responses to the database
+                currentResponses.forEach { response ->
+                    repository.insertQuizResponseLocal(response)
+                }
+                
+                // Update the UI state with results
+                _uiState.value = QuizUiState.Results(
+                    quiz = currentQuiz,
+                    questions = currentQuestions,
+                    responses = currentResponses,
+                    score = score,
+                    correctAnswers = correctAnswers,
+                    incorrectAnswers = currentResponses.count { !it.isCorrect },
+                    unansweredQuestions = totalQuestions - currentResponses.size
+                )
+                
+                // Stop the timer
+                stopTimer()
+                
+            } catch (e: Exception) {
+                _uiState.value = QuizUiState.Error(e.message ?: "Failed to submit quiz")
+            }
+        }
+    }
+    
+    /**
+     * Handles security violations during the quiz
+     */
+    fun onSecurityViolation(reason: String) {
+        _securityViolation.value = reason
+        // In a real app, you might want to auto-submit the quiz or take other actions
+    }
+    
+    /**
+     * Loads a random set of questions for a quiz
+     */
+    fun loadQuestionsForQuiz(quizId: String) {
+        viewModelScope.launch {
+            try {
+                _questions.value = repository.getQuestionsForQuizLocal(quizId)
+            } catch (e: Exception) {
+                _uiState.value = QuizUiState.Error(e.message ?: "Error loading questions")
+            }
+        }
+    }
+    
+    /**
+     * Starts the quiz timer
+     */
+    private fun startTimer() {
+        quizTimer?.cancel()
+        quizTimer = viewModelScope.launch {
+            while (true) {
+                delay(1000) // Wait for 1 second
+                _timeRemaining.update { remaining ->
+                    val newRemaining = remaining - 1.seconds
+                    if (newRemaining <= Duration.ZERO) {
+                        // Time's up, submit the quiz
+                        submitQuiz()
+                        Duration.ZERO
+                    } else {
+                        newRemaining
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * Stops the quiz timer
+     */
+    private fun stopTimer() {
+        quizTimer?.cancel()
+        quizTimer = null
+    }
+    
+    /**
+     * Cleans up resources when the ViewModel is cleared
+     */
+    override fun onCleared() {
+        super.onCleared()
+        stopTimer()
+    }
+
+    fun syncAllQuizzesFromRemote() {
+        viewModelScope.launch {
+            repository.syncAllQuizzesToLocal()
+            // Load all quizzes locally - implementation placeholder
+        }
+    }
+
+    fun createQuiz(quiz: Quiz) {
+        viewModelScope.launch {
+            repository.createQuizRemote(quiz)
+            repository.insertQuizLocal(quiz)
+            // Load all quizzes locally - implementation placeholder
+        }
+    }
+
+    fun loadQuestionsForQuizLocal(quizId: String) {
+        viewModelScope.launch {
+            _questions.value = repository.getQuestionsForQuizLocal(quizId)
+        }
+    }
+
+    fun syncQuestionsForQuizFromRemote(quizId: String) {
+        viewModelScope.launch {
+            val result = repository.getQuestionsForQuizRemote(quizId)
+            result.getOrNull()?.forEach { repository.insertQuizQuestionLocal(it) }
+            loadQuestionsForQuizLocal(quizId)
+        }
+    }
+
+    fun createQuizQuestion(quizId: String, question: QuizQuestion) {
+        viewModelScope.launch {
+            repository.createQuizQuestionRemote(quizId, question)
+            repository.insertQuizQuestionLocal(question)
+            loadQuestionsForQuizLocal(quizId)
+        }
+    }
+
+    fun updateQuizQuestion(question: QuizQuestion) {
+        viewModelScope.launch {
+            repository.updateQuizQuestionRemote(question)
+            repository.updateQuizQuestionLocal(question)
+            loadQuestionsForQuizLocal(question.quizId)
+        }
+    }
+
+    fun deleteQuizQuestion(questionId: String) {
+        viewModelScope.launch {
+            // Find the question to get the quizId
+            val question = _questions.value.find { it.questionId == questionId }
+            question?.let {
+                repository.deleteQuizQuestionRemote(questionId)
+                repository.deleteQuizQuestionLocal(questionId)
+                loadQuestionsForQuizLocal(it.quizId)
+            }
+        }
+    }
+    
+    /**
+     * Selects random questions from the question bank for a quiz
+     * @param count Number of questions to select
+     * @param questionBankId ID of the question bank to select from
+     * @param questionTypes List of question types to include (null for all types)
+     * @param marksFilter List of marks to include (null for all marks)
+     */
+    fun selectRandomQuestions(
+        count: Int,
+        questionBankId: String,
+        questionTypes: List<String>? = null,
+        marksFilter: List<Int>? = null
+    ) {
+        viewModelScope.launch {
+            // First, ensure we have the latest questions from the question bank
+            syncQuestionsForQuizFromRemote(questionBankId)
+            
+            // Filter questions based on criteria
+            val filteredQuestions = _questions.value.filter { question ->
+                (questionTypes == null || question.type.name in questionTypes) &&
+                (marksFilter == null || question.marks in marksFilter)
+            }
+            
+            // Select random questions
+            val selected = if (filteredQuestions.size <= count) {
+                filteredQuestions.shuffled()
+            } else {
+                val randomIndices = mutableSetOf<Int>()
+                while (randomIndices.size < count) {
+                    randomIndices.add(random.nextInt(filteredQuestions.size))
+                }
+                randomIndices.map { filteredQuestions[it] }
+            }
+            
+            _selectedQuestions.value = selected
+        }
+    }
+    
+    /**
+     * Creates a new quiz with randomly selected questions
+     * @param quiz The quiz to create
+     * @param questionCount Number of questions to include
+     * @param questionBankId ID of the question bank to select from
+     * @param questionTypes List of question types to include (null for all types)
+     * @param marksFilter List of marks to include (null for all marks)
+     */
+    fun createQuizWithRandomQuestions(
+        quiz: Quiz,
+        questionCount: Int,
+        questionBankId: String,
+        questionTypes: List<String>? = null,
+        marksFilter: List<Int>? = null
+    ) {
+        viewModelScope.launch {
+            // First select random questions
+            selectRandomQuestions(questionCount, questionBankId, questionTypes, marksFilter)
+            
+            // Create the quiz
+            val quizWithId = quiz.copy(quizId = UUID.randomUUID().toString())
+            createQuiz(quizWithId)
+            
+            // Add the selected questions to the quiz
+            _selectedQuestions.value.forEach { question ->
+                val newQuestion = question.copy(
+                    questionId = UUID.randomUUID().toString(),
+                    quizId = quizWithId.quizId
+                )
+                createQuizQuestion(quizWithId.quizId, newQuestion)
+            }
+            
+            // Clear the selected questions
+            _selectedQuestions.value = emptyList()
+        }
+    }
+
+    /**
+     * Submits a response for a single quiz question
+     */
+    fun submitResponse(questionId: String, answer: String) {
+        val question = _questions.value.find { it.questionId == questionId } ?: return
+        
+        val isCorrect = when (question.type) {
+            QuestionType.MCQ, QuestionType.TRUE_FALSE -> answer == question.correctAnswer
+            QuestionType.ONE_WORD -> answer.equals(question.correctAnswer, ignoreCase = true)
+            QuestionType.MULTIPLE_CORRECT -> answer.split(",").toSet() == question.correctAnswer.split(",").toSet()
+        }
+        
+        val response = QuizResponse(
+            responseId = "${UUID.randomUUID()}",
+            quizId = question.quizId,
+            questionId = questionId,
+            selectedAnswer = answer,
+            isCorrect = isCorrect,
+            submittedAt = System.currentTimeMillis()
+        )
+        
+        // Update responses map
+        _responses.update { current ->
+            current.toMutableMap().apply {
+                this[questionId] = response
+            }
+        }
+        
+        // Save response to repository
+        viewModelScope.launch {
+            try {
+                repository.insertQuizResponseLocal(response)
+                
+                // Update submitted responses
+                _submittedResponses.update { it + response }
+                
+                // Update score if all questions are answered
+                checkAndUpdateScore()
+                
+            } catch (e: Exception) {
+                _uiState.value = QuizUiState.Error(e.message ?: "Error saving response")
+            }
+        }
+    }
+    
+    /**
+     * Checks if all questions are answered and updates the score
+     */
+    private fun checkAndUpdateScore() {
+        val currentResponses = _responses.value.values.toList()
+        val allQuestions = _questions.value
+        
+        if (currentResponses.size == allQuestions.size) {
+            val correctAnswers = currentResponses.count { it.isCorrect }
+            val score = if (allQuestions.isNotEmpty()) {
+                (correctAnswers.toFloat() / allQuestions.size * 100).toInt()
+            } else {
+                0
+            }
+            
+            _score.value = score
+            
+            // Update UI state with results
+            _uiState.value = QuizUiState.Results(
+                quiz = _quiz.value,
+                questions = allQuestions,
+                responses = currentResponses,
+                score = score,
+                correctAnswers = correctAnswers,
+                incorrectAnswers = currentResponses.size - correctAnswers,
+                unansweredQuestions = 0
+            )
+        }
+    }
+
+    fun loadResponsesForQuizLocal(quizId: String) {
+        viewModelScope.launch {
+            _submittedResponses.value = repository.getResponsesForQuizLocal(quizId)
+        }
+    }
+
+    fun syncResponsesForQuizFromRemote(quizId: String) {
+        viewModelScope.launch {
+            val result = repository.getResponsesForQuizRemote(quizId)
+            result.getOrNull()?.forEach { repository.insertQuizResponseLocal(it) }
+            loadResponsesForQuizLocal(quizId)
+        }
+    }
+    
+    fun submitQuiz(studentId: String, sessionCode: String, answers: Map<String, String>) {
+        viewModelScope.launch {
+            // Create quiz response from answers
+            answers.forEach { (questionId, answer) ->
+                val response = QuizResponse(
+                    responseId = "${studentId}_${questionId}_${System.currentTimeMillis()}",
+                    quizId = sessionCode,
+                    studentId = studentId,
+                    questionId = questionId,
+                    selectedAnswer = answer,
+                    submittedAt = System.currentTimeMillis()
+                )
+                submitQuizResponse(response)
+            }
+        }
+    }
+
+    fun createTestQuizSession(teacherId: String, onSuccess: (Pair<String, String>) -> Unit = {}) {
+        viewModelScope.launch {
+            val result = repository.createTestQuizSession(teacherId)
+            result.getOrNull()?.let { sessionInfo ->
+                onSuccess(sessionInfo)
+            }
+        }
+    }
+
+    fun createQuizSession(teacherId: String, section: String, concept: String, questionIds: List<String>, onSuccess: (Pair<String, String>) -> Unit = {}) {
+        viewModelScope.launch {
+            val result = repository.createQuizSession(teacherId, section, concept, questionIds)
+            result.getOrNull()?.let { sessionInfo ->
+                onSuccess(sessionInfo)
+            }
+        }
+    }
+
+    fun syncQuizSessionsFromRemote(teacherId: String) {
+        viewModelScope.launch {
+            val result = repository.getQuizSessionsRemote(teacherId)
+            result.getOrNull()?.forEach { repository.insertQuizSessionLocal(it) }
+            loadQuizSessionsLocal(teacherId)
+        }
+    }
+
+    fun loadQuizSessionsLocal(teacherId: String) {
+        viewModelScope.launch {
+            _quizSessions.value = repository.getQuizSessionsLocal(teacherId)
+        }
+    }
+
+    fun startQuizSession(sessionId: String, durationMinutes: Int) {
+        viewModelScope.launch {
+            repository.startQuizSession(sessionId, durationMinutes)
+            // Refresh sessions after starting
+            val session = _quizSessions.value.find { it.sessionId == sessionId }
+            session?.let { syncQuizSessionsFromRemote(it.teacherId) }
+        }
+    }
+
+    fun deleteQuizSession(sessionId: String) {
+        viewModelScope.launch {
+            val session = _quizSessions.value.find { it.sessionId == sessionId }
+            session?.let {
+                repository.deleteQuizSessionRemote(sessionId)
+                repository.deleteQuizSessionLocal(sessionId)
+                syncQuizSessionsFromRemote(it.teacherId)
+            }
+        }
+    }
+
+    fun findQuizSessionByCode(code: String, onResult: (QuizSession?) -> Unit) {
+        viewModelScope.launch {
+            val result = repository.getQuizSessionByCodeRemote(code)
+            result.fold(
+                onSuccess = { session ->
+                    onResult(session)
+                },
+                onFailure = {
+                    onResult(null)
+                }
+            )
+        }
+    }
+
+    fun loadQuizQuestions(sessionCode: String): List<QuizQuestion> {
+        viewModelScope.launch {
+            // First try to load from local database
+            val localQuestions = repository.getQuestionsForSessionLocal(sessionCode)
+            if (localQuestions.isNotEmpty()) {
+                _questions.value = localQuestions
+            } else {
+                // If no local questions, try to sync from remote
+                val result = repository.getQuestionsForSessionRemote(sessionCode)
+                result.getOrNull()?.forEach { repository.insertQuizQuestionLocal(it) }
+                _questions.value = repository.getQuestionsForSessionLocal(sessionCode)
+            }
+        }
+        return _questions.value
+    }
+
+    fun setTestQuestions(questions: List<QuizQuestion>) {
+        _questions.value = questions
+    }
+
+    fun submitQuizResponse(response: QuizResponse) {
+        viewModelScope.launch {
+            try {
+                repository.insertQuizResponseLocal(response)
+                // Optionally sync to remote
+                // repository.createQuizResponseRemote(response)
+            } catch (e: Exception) {
+                // Handle error silently for now
+            }
+        }
+    }
+
+} 

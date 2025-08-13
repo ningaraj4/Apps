@@ -21,5 +21,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Feedback_App"
+rootProject.name = "EduFeed"
 include(":app")

@@ -1,0 +1,8 @@
+// Minimal build script to test Gradle functionality
+println 'Gradle version: ' + gradle.gradleVersion
+println 'Java home: ' + System.getProperty('java.home')
+task hello {
+    doLast {
+        println 'Hello, Gradle!'
+    }
+}
